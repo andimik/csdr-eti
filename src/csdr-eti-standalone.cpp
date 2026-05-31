@@ -4,12 +4,21 @@
 #include <cstdint>
 #include <vector>
 #include <getopt.h>
+#include <csignal>
+// #include <atomic>
 
 extern "C" {
     #include <fftw3.h>
     #include "sdr_prstab.h"
     #include "dab_tables.h"
 }
+
+// static std::atomic<bool> g_stop_requested{false};
+static volatile std::sig_atomic_t g_stop_requested = 0;
+extern "C" void handle_signal(int) {
+    g_stop_requested = 1;
+}
+
 
 // Include csdr headers
 #include <csdr/complex.hpp>
@@ -381,6 +390,10 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    std::signal(SIGINT, handle_signal);
+    std::signal(SIGTERM, handle_signal);
+
+
     // Open files
     std::ifstream input;
     if (!use_stdin) {
@@ -410,9 +423,13 @@ int main(int argc, char* argv[]) {
         size_t total_samples = 0;
         size_t frames_processed = 0;
 
-        while (inputStream.read(reinterpret_cast<char*>(iq_buffer.data()),
+        // while (inputStream.read(reinterpret_cast<char*>(iq_buffer.data()),
+        // iq_buffer.size() * sizeof(float))) {
+        while (!g_stop_requested &&
+            inputStream.read(reinterpret_cast<char*>(iq_buffer.data()),
             iq_buffer.size() * sizeof(float))) {
-            size_t bytes_read = inputStream.gcount();
+
+        size_t bytes_read = inputStream.gcount();
         size_t samples_read = bytes_read / (2 * sizeof(float));
 
         if (samples_read == 0) break;
@@ -432,12 +449,18 @@ int main(int argc, char* argv[]) {
                                  samples.size() * sizeof(Csdr::complex<float>));
 
             // Process all available frames
-            while (decoder.hasEnoughData()) {
+            while (!g_stop_requested && decoder.hasEnoughData()) {
                 decoder.processFrame();
                 frames_processed++;
             }
-            }
+        }
 
+        //    std::cerr << "Decoding complete!\n";
+        //    std::cerr << "Samples: " << total_samples << ", Frames: " << frames_processed << "\n";
+
+            if (g_stop_requested) {
+                std::cerr << "Interrupted, shutting down...\n";
+            }
             std::cerr << "Decoding complete!\n";
             std::cerr << "Samples: " << total_samples << ", Frames: " << frames_processed << "\n";
 
